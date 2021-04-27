@@ -46,6 +46,9 @@
 // SETUP
 void setup()
 {
+  Serial.begin(115200);
+  while (!Serial) {}
+  
   ClockGenerator.begin();
 } // setup()
 
