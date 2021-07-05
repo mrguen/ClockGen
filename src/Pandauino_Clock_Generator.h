@@ -1,9 +1,10 @@
-/*  Clock Generator library
- *  Version: 1.0
+/*
+ *	Clock Generator library
+ *  Version: 1.1.0
  *  By Pandauino.com / Thierry GUENNOU
- *  October 2020
+ *  June 2021
  *
- *  This library is used on the board "Clock Generator" implementing an Si5351A clock generator chip
+ *  This library is used on the board "Clock Generator v1.1" implementing an Si5351A clock generator chip and an STM32F103CB microcontroller
  *
  * 	DEPENDENCIES:
  *
@@ -11,9 +12,11 @@
  *
  *  ** The Arduino Core STM32 see https://github.com/stm32duino/Arduino_Core_STM32
  *
- *  ** The library Pandauino_Si5351A // revoir si on peut utiliser https://github.com/etherkit/Si5351Arduino avec paramètre de phase
+ *  ** The library https://github.com/mrguen/Si5351Arduino
+ *	that is a fork from Jason Milldrum's https://github.com/etherkit/Si5351Arduino
+ * 	Spread spectrum is not implemented See. "Manually Generating an Si5351 Register Map.pdf"
  *
- *  ** Rotary encoder library http://www.mathertel.de/Arduino/RotaryEncoderLibrary.aspx
+ *  ** Matthias Hertel Rotary encoder library http://www.mathertel.de/Arduino/RotaryEncoderLibrary.aspx
  *
  *  ** Matthias Hertel One Button library http://www.mathertel.de/Arduino/OneButtonLibrary.aspx
  *
@@ -30,7 +33,8 @@
  *  EVEN IF ADVISED OF THE POSSIBILITY OR LIKELIHOOD OF SUCH DAMAGES.
  *
  *  Licence CC BY-NC-SA 4.0 see https://creativecommons.org/licenses/by-nc-sa/4.0/
- *  You are free to use, modifiy and distribute this software for non commercial use while keeping the original attribution to Pandauino.com
+ *  You are free to use, modifiy and distribute this software for non commercial use while keeping the original attribution to Pandauino.com and other authors.
+ *
  */
 
 
@@ -56,7 +60,7 @@ Clock
 Options
 	Store / retrieve >
 	Sweep >
-	Cal: + 0.25 ppm
+	Cal: + x.xx ppm
 	Ph tied: 1-2-3
 	Fact reset
 	Exit
@@ -86,15 +90,8 @@ Sweep C1-C3
 
 */
 
-
-// ON POURRAIT IMPLEMENTER SPREAD SPECTRUM, uniquement pour les horloges alimentées par PLLA
-// VOIR "Manually Generating an Si5351 Register Map.pdf"
-
-
 #ifndef Pandauino_ClockGenerator_h
 #define Pandauino_ClockGenerator_h
-
-//#include <Si5351A.h>
 
 #include <si5351.h>
 
@@ -158,67 +155,58 @@ enum runMode {
 	display_SweepCx_exit
 };
 
+
 // ***********************************************************************
 // CONSTANTS
 
-const int TFT_CS = PA2; 							//	TFT signal pins. Used harware SPI i.e. SCK = PA5, MOSI = PA7
+const int TFT_CS = PA2; 													//	TFT signal pins. Used harware SPI i.e. SCK = PA5, MOSI = PA7 plus these pins
 const int TFT_DC = PA3;
 const int TFT_RST = PA4;
+const int activateBlPin = PB9;										// TFT backlight pin
 
-const int boostLap = 150;            	// used in testEncoder(). If the encoder changes value in less than boostLap then count 10 steps instead of one
-const int flashPeriod = 500;          // used in flashCursor to set the cursor flash period. In ms.
-const int coefEncoder = 10;          	// used in testEncoder() to set the boost coef depending on the context
-const byte menuButton = PA0;     			// encoder button on PA0;
+const int boostLap = 150;            							// used in testEncoder(). If the encoder changes value in less than boostLap then count 10 steps instead of one
+																									// ! it reacts differently depending on the encoder model
 
-const float frMinKHz = SI5351_CLKOUT_MIN_FREQ;       		// minimum frequency of the KHz range
-const float frMaxKHz = 999999;     		// maximum frequency of the KHz range
-const float frMinMHz = 1000000;    		// minimum frequency of the MHz range
+const int flashPeriod = 500;          						// used in flashCursor to set the cursor flash period. In ms.
+const int coefEncoder = 10;          							// used in testEncoder() to set the boost coef depending on the context
+const byte menuButton = PA0;     									// encoder button on PA0;
 
-const long frMinPhase = 7200000;			// it is useless to program the phase for too low frequencies because the freqStep is too small
+const float frMinKHz = SI5351_CLKOUT_MIN_FREQ;   	// minimum frequency of the KHz range
+const float frMaxKHz = 999999;     								// maximum frequency of the KHz range
+const float frMinMHz = 1000000;    								// minimum frequency of the MHz range
 
-const int eeAddress = 0;            	// eeprom address where to store eepromInit followed by the table of clocks
-const byte eepromInit = 8;          	// a number that should be present at eeAddress
+const long frMinPhase = 3500000;									// it is useless to program the phase for too low frequencies because the freqStep is too small
+const uint32_t  xtalFreq = 26000000; 							// Ref Xtal clock frequency of the SI5351  in Hz unit !!
 
-const uint32_t  xtalFreq = 26000000; 	// Ref Xtal clock frequency of the SI5351  in Hz unit !!
+const unsigned short colorActive =  0xFFFF;				// Color used for active clock
+const unsigned short colorInverted =  0x07FF;			// Color used for active inverted clock
+const unsigned short colorInactive =  0xF800;			// Color used for inactive clock
 
-const unsigned short colorActive =  0xFFFF;		// Color used for active clock
-const unsigned short colorInverted =  0x07FF;	// Color used for active inverted clock
-const unsigned short colorInactive =  0xF800;	// Color used for inactive clock
+const unsigned short colorSweepInactive =  0x6546;		// Color used for the sweep button when not sweeping
+const unsigned short colorSweepHold =  ST7735_GREEN;	// Color used for the sweep button when sweeping on hold
+const unsigned short colorSweepRunning =  0xF888;			// Color used for the sweep button when sweeping
 
-const unsigned short colorSweepInactive =  0x6546;	// Color used for active inverted clock
-const unsigned short colorSweepHold =  ST7735_GREEN;	// Color used for inactive clock
-const unsigned short colorSweepRunning =  0xF888;	// Color used for inactive clock
+const int flashInitAddress = 0x10;								// Flash address to store flashInitFlag to check if eeprom is initialized and not corrupted
+const int flashInitFlag = 888;										// Flag stored in EEPROM @flashInitAddress
+const int flashCalibrationAddress = 0x20;					// Flash base adress to store calibration parameters in emulated EEPROM
+const int flashSweepAddress = 0x30;								// Flash base adress to store sweep parameters in emulated EEPROM
+const int flashClockBaseAddress = 0x40;						// Flash base adress to store clock objects in emulated EEPROM
 
-const int flashInitAddress = 0x10;						// Flash address to store a flag to check if eeprom is initialized and not corrupted
-const int flashInitFlag = 777;								// Flag stored in EEPROM @flashInitAddress
-const int flashCalibrationAddress = 0x20;			// Flash base adress to store calibration parameters in emulated EEPROM
-const int flashSweepAddress = 0x30;						// Flash base adress to store sweep parameters in emulated EEPROM
-const int flashClockBaseAddress = 0x40;				// Flash base adress to store clock objects in emulated EEPROM
+const byte nbClock = 3;                     			// 3 clock objects
 
-const byte nbClock = 3;                     	// 3 clock objects
+const int lineHeight = 14; 												// Display line heigth
+const int interLine = 4;            							// Display inter-line
 
-const int lineHeight = 14; 						// Display line heigth
-const int interLine = 4;            	// Display inter-line
+const int statusLedPin = PB0;											// Status led pin can be used to give visual information at will
 
-const int statusLedPin = PB0;					// Status led pin can be used to give visual information at will
+const float maxCal = 50.0;												// Maximum calibration compensation value in ppm
 
+const int minNbSweep = 1;													// Minimum number of sweep steps
+const int maxNbSweep = 9999;											// Maximum number of sweep steps
 
-//**********************************************************************
-// INSTANCES
+const int minSweepPeriod = 0.1;										// Minimum sweep period
+const int maxSweepPeriod = 9.9;										// Maximum sweep period
 
-// Setup a RotaryEncoder
-extern RotaryEncoder encoder;
-
-// Setup TFT 1.44 ST7735 controller
-extern Adafruit_ST7735 tft;
-
-// Menu button
-extern OneButton button;
-
-// Instantiates Si5351A clock generator
-//extern Si5351 mySi5351A;
-
-//extern si5351_clock clk;  							// Enum value that identifies the selected clock object
 
 //**********************************************************************
 // Class Clock
@@ -228,7 +216,7 @@ class Clock {
     byte id;            // clock ID
     boolean ac;         // turns on/off the clock
     uint32_t fr;        // clock frequency in Hz
-    byte un;            // clock range: 0 for KHz, 1 for MHz                // un est systématiquemet altérée... je ne vois pas pourquoi. Essayer de privatiser?
+    byte un;            // clock range: 0 for KHz, 1 for MHz
     boolean in;         // clock invert / not
     long st;            // clock adjustment frequency step: 1, 10, 100, 1000, 10000, 100000, 1000000
     si5351_drive dr;    // clock drive
@@ -244,7 +232,6 @@ class Clock {
     Clock(byte, boolean, uint32_t, byte, boolean, long, si5351_drive, byte, boolean, byte, long, long, long);
     Clock(); // not initialized.
 
-   // void setUn(char *);
 }; // End of Clock Class declaration
 
 
@@ -260,11 +247,10 @@ class ClockGeneratorClass {
   public:
 
 		ClockGeneratorClass();
-  	static void begin();
+  	static void begin(boolean activateSerial = false, long baudRate = 9600 );
   	static void run();
 
-   	// Si5351 programming and clock parameters computing
-   	static void setFrequency(int clockId, uint32_t frequency); // si appelé tel quel incohérence. Il faut aussi utilise configureSi5351(); puis getPhaseStep if necessary
+   	static void setFrequency(int clockId, uint32_t frequency);
 		static uint32_t getFrequency(int clockId);
     static void getPLLSettings(int clockId, si5351_pll& pll, uint64_t& pllFr );
 
@@ -389,30 +375,28 @@ class ClockGeneratorClass {
    	static void buttonClick();
 
 		// Variables
- 		static Clock tbClock[];
 
-		static PLLAClocks PLLAClks;    	// PLLModes enum value. The users choses which clocks are phase related / fed by PLLA.
+		static boolean activateUSBSerial;
+ 		static Clock tbClock[];										// A table to store the 3 clock objects
 
+		static PLLAClocks PLLAClks;    						// PLLModes enum value. The users choses which clocks are phase related / fed by PLLA
 
-	//	static unsigned long int PLLdivider; 			// PLL divider to get the clock frequency
-	//	static uint64_t pllAFreq;                 // Pll frequency. Computed in configureSi5351()
-	//	static uint64_t pllBFreq;                 // Pll frequency. Computed in configureSi5351()
-		static float phaseStep ;                	// Phase step in degrees. Computed in configureSi5351()
+		static float phaseStep ;                	// Phase step in degrees
 		static byte newPhaseIndice;								// Local variable user in run() to compute the new phase
 
 		static unsigned int timeTestEncoder;			// Used in testEncoder() to determine if the encoder is rotated in boost mode
 		static int pos;														// Encoder position
 		static int newPos;           							// Pos and newPos are used in testEncoder() to determine encoder pulse count
-		static int encoderIncDec;  								// Used to flag if the encoder value has increased or decreased at the beginning of the loop.
+		static int encoderIncDec;  								// Used to flag if the encoder value has increased or decreased at the beginning of the loop
 
 		static runMode editMode;   								// defines the current state of the interface
 
 		static byte selectedClock;     						// Stores the current selected clock number
 
-		static boolean flash;											// Used flash the cursor
-		static unsigned int flashStamp;  					// Used to set the flashing speed in flashCursor
+		static uint64_t lowestFrequency;					// Stores the lowest possible frequency of a clock depending on the PLL frequency
 
-//		static byte outputDrive[4];								// List of setable output drives
+		static boolean flash;											// Used to flash the cursor
+		static unsigned int flashStamp;  					// Used to set the flashing speed in flashCursor
 
 		static bool editing;											// Editing a parameter or not
 

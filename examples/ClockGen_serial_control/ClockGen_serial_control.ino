@@ -17,6 +17,7 @@
  *  Open the Serial Monitor @9600 bauds. You can send commands from the Serial Monitor
  * 
  * 2) If you want to control the Clock Generator from another device without connexion to the computer / Serial Monitor, keep the line #define DEBUG 0 
+ *  You could use the sketch SendCommands.ino for that purpose
  * 
  *  This code is based on Arduino code and is provided with the same warning that:
  *  THIS SOFTWARE IS PROVIDED TO YOU "AS IS" AND WE MAKE NO EXPRESS OR IMPLIED WARRANTIES WHATSOEVER WITH RESPECT TO ITS FUNCTIONALITY, OPERABILITY, OR USE,

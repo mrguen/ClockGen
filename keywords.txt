@@ -1,0 +1,27 @@
+ClockGenerator	KEYWORD1 
+
+begin	KEYWORD2
+run	KEYWORD2
+setFrequency	KEYWORD2
+getFrequency	KEYWORD2
+getPLLSettings	KEYWORD2
+setPhase	KEYWORD2
+getPhase	KEYWORD2
+setDrive	KEYWORD2 
+getDrive	KEYWORD2 
+changeClockOutputState	KEYWORD2 
+configureSi5351	KEYWORD2 
+getPhaseStep	KEYWORD2 
+setNbSweep	KEYWORD2 
+setSweepPeriod	KEYWORD2 
+getSweepParam	KEYWORD2 
+setSweepParamCx	KEYWORD2 
+getSweepParamCx	KEYWORD2 
+initSweep	KEYWORD2 
+stopSweep	KEYWORD2 
+testSweep	KEYWORD2 
+setCalibration	KEYWORD2 
+getCalibration	KEYWORD2 
+setPhaseTiedClocks	KEYWORD2 
+getPhaseTiedClocks	KEYWORD2 
+displayAllClocks	KEYWORD2 

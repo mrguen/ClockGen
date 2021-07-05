@@ -1,6 +1,8 @@
 /*********************************************************************
-
-
+You can use this script on an Arduino board (Uno, Nano, 644 or 1284 Narrow, 644 or 1284 Wide etc) 
+To send commands to the Clock Generator v1.1 board when it is programmed with the sketch ClockGen_serial_control.ino
+The controlling board will send its commands through Serial to the Clock Generator board
+Connect Tx of the controlling board to Rx of the Clock Generator and Rx of the controling board to Tx of the Clock Generator
 *********************************************************************/
 
 #include <Adafruit_GFX.h>
@@ -10,7 +12,7 @@
 #define OLED_RESET 4
 
 #define mySerial Serial     // If you want to user the first serial port. In this case disconnect the USB after programming to avoid interference with the USB
-//#define mySerial Serial1  // If you want to user the second serial port (on the 1284 Narrow board for example Rx1 = 10, Tx1 = 11). 
+//#define mySerial Serial1  // If you want to user the second serial port if available (on the 1284 Narrow board for example Rx1 = 10, Tx1 = 11). 
 
 static const unsigned int MAX_INPUT = 50;
 static char input_line [MAX_INPUT];

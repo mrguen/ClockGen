@@ -2,16 +2,15 @@
 
 //============================== DEFINITIONS OF STATIC MEMBERS ================================================================
 
+boolean ClockGeneratorClass::activateUSBSerial = false;
+
 Clock ClockGeneratorClass::tbClock[3] = {
-	Clock(0, true, 100000200, 1, false, 1000000, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000),
-	Clock(1, true, 5100, 0, true, 1000, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000),
-	Clock(2, false, 4001, 0, false, 100, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000)
+	Clock(0, true, 100000000, 1, false, 1000000, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000),
+	Clock(1, true, 200000, 0, true, 1000, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000),
+	Clock(2, false, 2500, 0, false, 100, SI5351_DRIVE_8MA, 0, false, 0, 100, 10000, 100000)
 };
 
-PLLAClocks ClockGeneratorClass::PLLAClks;    	// PLLModes enum value. The users choses which clocks are phase related / fed by PLLA.
-// unsigned long int ClockGeneratorClass::PLLdivider;
-// uint64_t ClockGeneratorClass::pllAFreq;
-// uint64_t ClockGeneratorClass::pllBFreq;
+PLLAClocks ClockGeneratorClass::PLLAClks;
 float ClockGeneratorClass::phaseStep;
 byte ClockGeneratorClass::newPhaseIndice;
 
@@ -24,10 +23,10 @@ runMode ClockGeneratorClass::editMode = display_clocks_c0;
 
 byte ClockGeneratorClass::selectedClock = 0;
 
+uint64_t ClockGeneratorClass::lowestFrequency = SI5351_CLKOUT_MIN_FREQ;
+
 boolean ClockGeneratorClass::flash;
 unsigned int ClockGeneratorClass::flashStamp = millis();
-
-//byte ClockGeneratorClass::outputDrive[4];
 
 bool ClockGeneratorClass::editing = false;
 
@@ -40,10 +39,11 @@ int volatile ClockGeneratorClass::countSweep = 0;
 
 swState ClockGeneratorClass::sweepState = INACTIVE;
 
+
 //=================================== INSTANCES =============================================================================
 
 // Setup a RotaryEncoder
-RotaryEncoder encoder(PB13, PB12);
+RotaryEncoder encoder(PB12, PB13); // Depends on encoders
 
 // Setup TFT 1.44 ST7735 controller
 Adafruit_ST7735 tft = Adafruit_ST7735(&SPI, TFT_CS,  TFT_DC, TFT_RST);
@@ -54,14 +54,17 @@ OneButton button(menuButton, true);
 // Instantiates Si5351 clock generator
 Si5351 mySi5351;
 
+// Default clock
 si5351_clock clk = SI5351_CLK0;   				// Enum value that identifies the selected clock object
 
+// Instantiating a timer to use for sweeping
 HardwareTimer *timer1 = new HardwareTimer(TIM1);
 
 
 
 //=================================== Generic function =============================================================================
 
+// Function used when printing 64 bit integer through Serial for debug
 void printUint64_t(uint64_t num) {
 
   char rev[128];
@@ -108,7 +111,6 @@ Clock:: Clock() {}
 //=================================== ClockGenerator CLASS ====================================================================
 //=============================================================================================================================
 
-//=================================== Public functions ========================================================================
 
 // ***********************************************************************************************************
 // ClockGenerator constructor
@@ -118,64 +120,61 @@ ClockGeneratorClass::ClockGeneratorClass() {
 
 // ***********************************************************************************************************
 // Begin
-void ClockGeneratorClass::begin() {
+void ClockGeneratorClass::begin(boolean activateSerial, long baudRate) {
 
   pinMode(statusLedPin, OUTPUT);
   digitalWrite(statusLedPin, HIGH);
   delay(500);
   digitalWrite(statusLedPin, LOW);
 
-  SPI.setClockDivider(SPI_CLOCK_DIV2);
-
-  // These two lines are mandatory to start Serial. The serial monitor should be stopped before a manual reset and started again. Otherwise the COM port might be lost
-  //Serial.begin(115200);
-  //while (!Serial);
-  //delay(10);
-
-  Serial.println("Begin setup");
-
-  // Tests if flash is populated and populates it if empty
-  flashInit();
-	readCalibration();
-	readSweepSettings();
-  // Loads all current (slot range = 0) clock parameters
-  readAllClocksFromFlash(0);
-
-	sweepState = computeSweepState();
-
-	// VERIFIER  SI NECESSAIRE
-	// readPLLAClocks();
-
-
-/*   // TEST
-  TestFlash();
-  Serial.print("flashStamp: ");
-  Serial.println(flashStamp);
-*/
-
-  // BUTTON
-  pinMode(menuButton, INPUT_PULLUP);
-
-  button.attachClick(buttonClick); 					// Pas sur que ca fonctionne car appel de méthode privée mais compile
-  button.attachLongPressStart(buttonPress); // Pas sur que ca fonctionne car appel de méthode privée mais compile
-
-  // Max freq /// A REVOIR ENLEVER ?
-  //if (PLLAClks != PLLA_CK0) SI5351_CLKOUT_MAX_FREQ =  SI5351_CLKOUT_MAX_FREQ;
-  //else SI5351_CLKOUT_MAX_FREQ =  SI5351_CLKOUT_MAX_FREQ;
-
-  // Si5351
-  mySi5351.init(SI5351_CRYSTAL_LOAD_8PF, xtalFreq, 0);
-
-  // Will compute the best pllFreq and pll divider possible given the 3 clocks parameters
-  // and configure Si5351
-  configureSi5351();
+  pinMode(activateBlPin, OUTPUT);
+  digitalWrite(activateBlPin, HIGH);
 
   // TFT
+	tft.setSPISpeed(8000000);
   tft.initR(INITR_144GREENTAB);   //  A VERIFIER
   tft.setRotation(1);
   tft.fillScreen(ST7735_BLACK);
   tft.setFont(&FreeSans9pt7b);
   tft.setTextSize(1);
+
+	// USB Serial
+	activateUSBSerial = activateSerial;
+
+	if (activateUSBSerial) {
+  	Serial.begin(baudRate);
+  	while (!Serial);
+  	Serial.println("Begin setup");
+	}
+
+  // Tests if flash is populated and populates it if empty
+  flashInit();
+
+	// Loads calibration and sweepSettings;
+	readCalibration();
+	readSweepSettings();
+  // Loads all current (slot range = 0) clock parameters
+  readAllClocksFromFlash(0);
+
+	//DEBUG
+	// if (activateUSBSerial)  printInfoClocks();
+
+	// Determines if a clock sweep is active
+	sweepState = computeSweepState();
+
+  // Menu button
+  pinMode(menuButton, INPUT_PULLUP);
+  button.attachClick(buttonClick);
+  button.attachLongPressStart(buttonPress);
+
+  // Init Si5351
+  mySi5351.init(SI5351_CRYSTAL_LOAD_10PF, xtalFreq, 0); //Precise value of load capacitors for the crystal SX32Y026000M31T-10.5U
+  setCalibration(calibrationPPM);
+
+  // Will compute the best pllFreq and pll divider possible given the 3 clocks parameters
+  // and configure Si5351
+  configureSi5351();
+
 
   // displays first screen with all 3 clocks parameters
   displayAllClocks();
@@ -184,28 +183,15 @@ void ClockGeneratorClass::begin() {
   displayCursor(true);
 
   // DEBUG
-  // printRegisters();
-  // digitalWrite(statusLedPin, HIGH);
-  // delay(500);
-  // digitalWrite(statusLedPin, LOW);
-
-  Serial.println("End setup");
-
-
-	// DEBUG
-	// displayStore();
-	// displaySweep();
-	// displaySweepSettings(1);
-	// displayOptions();
+  if (activateUSBSerial) delay(1000); printRegisters();
 
 }
+
 
 // ***********************************************************************************************************
 // getPhaseStep
 float ClockGeneratorClass::getPhaseStep(int clockId) {
-
 	return 9000.0 * ((double)tbClock[clockId].fr / (double)mySi5351.plla_freq);
-
 }
 
 
@@ -213,23 +199,23 @@ float ClockGeneratorClass::getPhaseStep(int clockId) {
 // setNbSweep
 void ClockGeneratorClass::setNbSweep(int nbSweep) {
 
-	if (nbSweep > 9999) nbSweep = 9999;
-	if (nbSweep < 1) nbSweep = 1;
-
+	if (nbSweep > maxNbSweep) nbSweep = maxNbSweep;
+	if (nbSweep < minNbSweep) nbSweep = minNbSweep;
 	nbPeriodSweep = nbSweep;
 
 }
+
 
 // ***********************************************************************************************************
 // setSweepPeriod
 void ClockGeneratorClass::setSweepPeriod(float sweepPeriod) {
 
-	if (sweepPeriod > 9.9) sweepPeriod = 9.9;
-	if (sweepPeriod < 0.1) sweepPeriod = 0.1;
-
+	if (sweepPeriod > maxSweepPeriod) sweepPeriod = maxSweepPeriod;
+	if (sweepPeriod < minSweepPeriod) sweepPeriod = minSweepPeriod;
 	periodSweep = sweepPeriod;
 
 }
+
 
 // ***********************************************************************************************************
 // setSweepPeriod
@@ -237,6 +223,7 @@ void ClockGeneratorClass::getSweepParam(int& nbSweep, float& sweepPeriod) {
 	nbSweep = nbPeriodSweep;
 	sweepPeriod = periodSweep;
 }
+
 
 // ***********************************************************************************************************
 // setSweepParamCx
@@ -248,6 +235,7 @@ void ClockGeneratorClass::setSweepParamCx(int clockId, long startFreq, long stop
 
 }
 
+
 // ***********************************************************************************************************
 // getSweepParamCx
 void ClockGeneratorClass::getSweepParamCx(int clockId, long& startFreq, long& stopFreq, boolean& sweepActive) {
@@ -258,24 +246,21 @@ void ClockGeneratorClass::getSweepParamCx(int clockId, long& startFreq, long& st
 
 }
 
+
 // ***********************************************************************************************************
 // setCalibration
 void ClockGeneratorClass::setCalibration(float cal) {
-
-	if (cal > 9.99) cal = 9.99;
-	if (cal < -9.99) cal = -9.99;
-
-	calibrationPPM = cal;
-
+	mySi5351.set_correction(-1 * cal*1000, SI5351_PLL_INPUT_XO);
 }
+
 
 // ***********************************************************************************************************
 // getCalibration
 float ClockGeneratorClass::getCalibration() {
-
+	calibrationPPM = -1 * mySi5351.get_correction(SI5351_PLL_INPUT_XO) / 1000;
   return calibrationPPM;
-
 }
+
 
 // ***********************************************************************************************************
 // setPhaseTiedClocks(int)
@@ -283,28 +268,26 @@ void ClockGeneratorClass::setPhaseTiedClocks(byte phtied) {
  setPhaseTiedClocks(static_cast<PLLAClocks>(phtied));
 }
 
+
 // ***********************************************************************************************************
 // setPhaseTiedClocks(PLLAClocks)
 void ClockGeneratorClass::setPhaseTiedClocks(PLLAClocks Pllaclk) {
-
 	PLLAClks = Pllaclk;
   savePLLAClocks(0);
-	//mySi5351.init(SI5351_CRYSTAL_LOAD_8PF, xtalFreq, 0); // necesary since clocks might have changed PLL
 	configureSi5351();
-
 }
+
 
 // ***********************************************************************************************************
 // getPhaseTiedClocks
 byte ClockGeneratorClass::getPhaseTiedClocks() {
-
 	return((byte)PLLAClks);
-
 }
 
-// ***********************************************************************************************************
-// Run
 
+// ***********************************************************************************************************
+// Run. This is called in the loop()
+// It's polling the interface to check what action to take depending on the editMode value and the editing status
 void ClockGeneratorClass::run() {
 
 	if (editing) flashCursor();  // shows that we are currently editing
@@ -318,10 +301,6 @@ void ClockGeneratorClass::run() {
   // computes the encoder value
   encoderIncDec = testEncoder();
   if (encoderIncDec == 0) return;
-
-	// Debug
-	//Serial.print("editMode: ");
-	//Serial.println(editMode);
 
 	// ==========================================================
   // Takes care of all the navigation up/down in menus
@@ -339,18 +318,19 @@ void ClockGeneratorClass::run() {
     case display_range:
 
       if (encoderIncDec != 0) {
-        // DEBUG
-        //Serial.println( tbClock[selectedClock].un );
+
+        lowestFrequency = mySi5351.lowestFrequency(mySi5351.pll_assignment[selectedClock]) / SI5351_FREQ_MULT;
 
         if (tbClock[selectedClock].un == 1) {
           tbClock[selectedClock].un = 0;
           tbClock[selectedClock].st = 1000;
-          tbClock[selectedClock].fr = frMinKHz;
+          tbClock[selectedClock].fr = lowestFrequency;
         }
         else if (tbClock[selectedClock].un == 0) {
           tbClock[selectedClock].un = 1;
           tbClock[selectedClock].st = 1000000;
-          tbClock[selectedClock].fr = SI5351_CLKOUT_MIN_FREQ;
+
+          tbClock[selectedClock].fr = lowestFrequency;
         }
 
         clk = static_cast<si5351_clock>(selectedClock);
@@ -424,14 +404,16 @@ void ClockGeneratorClass::run() {
       if (encoderIncDec != 0) {
 
         long newFreq = roundFrequency(tbClock[selectedClock].fr + encoderIncDec * tbClock[selectedClock].st);
+				lowestFrequency = mySi5351.lowestFrequency(mySi5351.pll_assignment[selectedClock]) / SI5351_FREQ_MULT;
 
         if (tbClock[selectedClock].un == 0) {
-          if (newFreq <frMinKHz) newFreq = frMinKHz;
+          if (newFreq <lowestFrequency) newFreq = lowestFrequency;
           if (newFreq >frMaxKHz) newFreq = frMaxKHz;
         }
         else if (tbClock[selectedClock].un == 1) {
-          if (newFreq <SI5351_CLKOUT_MIN_FREQ) newFreq = SI5351_CLKOUT_MIN_FREQ;
-          if (newFreq >SI5351_CLKOUT_MAX_FREQ) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz and 100 MHs when 2 or 3 clocks are phase tied
+          if (newFreq < lowestFrequency) newFreq = lowestFrequency;
+          if ((selectedClock == 0) && (newFreq > SI5351_CLKOUT_MAX_FREQ)) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz
+          if ((selectedClock != 0) && (newFreq > SI5351_MULTISYNTH_SHARE_MAX)) newFreq = SI5351_MULTISYNTH_SHARE_MAX; // 100 MHz
         }
 
         // Only one clock can be set above 100 MHz in all cases.
@@ -439,11 +421,14 @@ void ClockGeneratorClass::run() {
           if ((i != selectedClock) && (tbClock[i].fr > SI5351_MULTISYNTH_SHARE_MAX) && (newFreq > SI5351_MULTISYNTH_SHARE_MAX)) newFreq = SI5351_MULTISYNTH_SHARE_MAX;
         }
 
- //       tbClock[selectedClock].fr = newFreq;
+				// Check the minimum possible frequency
+				if (newFreq < lowestFrequency) newFreq = lowestFrequency;
+
 				setFrequency(selectedClock, newFreq);
-//				setPhase(selectedClock, tbClock[selectedClock].ph +1);
         edit1Clock(tbClock[selectedClock], true );
+
       }
+
       flashCursor();
       break;
 
@@ -454,7 +439,6 @@ void ClockGeneratorClass::run() {
         int newDrive = (int)tbClock[selectedClock].dr + encoderIncDec;
         if (newDrive > 3) newDrive = 3;
         if (newDrive < 0) newDrive = 0;
-//        si5351_drive drv = static_cast<si5351_drive>(newDrive);
 				setDrive(selectedClock, newDrive);
         edit1Clock(tbClock[selectedClock], true );
 
@@ -466,8 +450,8 @@ void ClockGeneratorClass::run() {
 
       if (encoderIncDec != 0) {
 
-				if (encoderIncDec>0) newPhaseIndice = tbClock[selectedClock].ph + 1;
-				else newPhaseIndice = tbClock[selectedClock].ph -1;
+				if ((encoderIncDec>0) && (newPhaseIndice != 127)) newPhaseIndice = tbClock[selectedClock].ph + 1;
+				else if (newPhaseIndice != 0) newPhaseIndice = tbClock[selectedClock].ph -1;
 
 				setPhase(selectedClock, newPhaseIndice);
         edit1Clock(tbClock[selectedClock], true );
@@ -478,9 +462,10 @@ void ClockGeneratorClass::run() {
 
 		case display_calibration:
 
-			calibrationPPM += ((float)encoderIncDec)/100.0;
-			setCalibration(calibrationPPM);
-			//setFrequency(selectedClock, tbClock[selectedClock].fr);
+			calibrationPPM += ((float)encoderIncDec)/10.0;
+
+			if (calibrationPPM > maxCal) calibrationPPM = maxCal;
+			if (calibrationPPM < -1.0 * maxCal) calibrationPPM = -1.0 * maxCal;
 			printCal(true);
 			break;
 
@@ -492,11 +477,6 @@ void ClockGeneratorClass::run() {
         else if (PLLAClks == PLLA_CK0_CK1) { PLLAClks = PLLA_CK0_CK2; }
         else if (PLLAClks == PLLA_CK0_CK2) { PLLAClks = PLLA_CK1_CK2; }
         else { PLLAClks = PLLA_CK0; }
-
-				// A REVOIR, ARBITRAIRE
-        // If clocks are phase tied, the max frequency is 100 MHz
-        //if (PLLAClks != PLLA_CK0) SI5351_CLKOUT_MAX_FREQ =  SI5351_MULTISYNTH_SHARE_MAX;
-        //else SI5351_CLKOUT_MAX_FREQ =  SI5351_CLKOUT_MAX_FREQ;
 
         printPhaseOptions(true);
       }
@@ -526,17 +506,19 @@ void ClockGeneratorClass::run() {
 		case display_rangeSweep:
     if (encoderIncDec != 0) {
 
+			lowestFrequency = mySi5351.lowestFrequency(mySi5351.pll_assignment[selectedClock]) / SI5351_FREQ_MULT;
+
     	if (tbClock[selectedClock].rs == 1) {
     		tbClock[selectedClock].rs = 0;
     		tbClock[selectedClock].ss = 1000;
-        tbClock[selectedClock].sa = frMinKHz;
-        tbClock[selectedClock].so = frMinKHz;
+        tbClock[selectedClock].sa = lowestFrequency;
+        tbClock[selectedClock].so = lowestFrequency;
       }
       else if (tbClock[selectedClock].rs == 0) {
         tbClock[selectedClock].rs = 1;
         tbClock[selectedClock].ss = 1000000;
-        tbClock[selectedClock].sa = SI5351_CLKOUT_MIN_FREQ;
-        tbClock[selectedClock].so = SI5351_CLKOUT_MIN_FREQ;
+        tbClock[selectedClock].sa = lowestFrequency;
+        tbClock[selectedClock].so = lowestFrequency;
       }
 
 			printSweepRange(tbClock[selectedClock], true);
@@ -603,13 +585,15 @@ void ClockGeneratorClass::run() {
 
     	long newFreq = roundFrequency(tbClock[selectedClock].sa + encoderIncDec * tbClock[selectedClock].ss);
 
+			lowestFrequency = mySi5351.lowestFrequency(mySi5351.pll_assignment[selectedClock]) / SI5351_FREQ_MULT;
+
       if (tbClock[selectedClock].rs == 0) {
-      	if (newFreq <frMinKHz) newFreq = frMinKHz;
+      	if (newFreq < lowestFrequency ) newFreq = lowestFrequency;
       	if (newFreq >frMaxKHz) newFreq = frMaxKHz;
       }
       else if (tbClock[selectedClock].rs == 1) {
-      	if (newFreq <SI5351_CLKOUT_MIN_FREQ) newFreq = SI5351_CLKOUT_MIN_FREQ;
-      	if (newFreq >SI5351_CLKOUT_MAX_FREQ) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz and 100 MHs when 2 or 3 clocks are phase tied
+      	if (newFreq < lowestFrequency) newFreq = lowestFrequency;
+      	if (newFreq > SI5351_CLKOUT_MAX_FREQ) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz and 100 MHs when 2 or 3 clocks are phase tied
       }
 
       // Only one clock can be set above 100 MHz in all cases.
@@ -627,14 +611,15 @@ void ClockGeneratorClass::run() {
     if (encoderIncDec != 0) {
 
     	long newFreq = roundFrequency(tbClock[selectedClock].so + encoderIncDec * tbClock[selectedClock].ss);
+			lowestFrequency = mySi5351.lowestFrequency(mySi5351.pll_assignment[selectedClock]) / SI5351_FREQ_MULT;
 
       if (tbClock[selectedClock].rs == 0) {
-      	if (newFreq <frMinKHz) newFreq = frMinKHz;
-      	if (newFreq >frMaxKHz) newFreq = frMaxKHz;
+      	if (newFreq < lowestFrequency) newFreq = lowestFrequency;
+      	if (newFreq > frMaxKHz) newFreq = frMaxKHz;
       }
       else if (tbClock[selectedClock].rs == 1) {
-      	if (newFreq <SI5351_CLKOUT_MIN_FREQ) newFreq = SI5351_CLKOUT_MIN_FREQ;
-      	if (newFreq >SI5351_CLKOUT_MAX_FREQ) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz and 100 MHs when 2 or 3 clocks are phase tied
+      	if (newFreq < lowestFrequency) newFreq = lowestFrequency;
+      	if (newFreq > SI5351_CLKOUT_MAX_FREQ) newFreq = SI5351_CLKOUT_MAX_FREQ; // 220 MHz and 100 MHs when 2 or 3 clocks are phase tied
       }
 
       // Only one clock can be set above 100 MHz in all cases.
@@ -686,11 +671,13 @@ void ClockGeneratorClass::printRegisters() {
   }
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printInfoClocks
 void ClockGeneratorClass::printInfoClocks() {
   for (int i = 0; i < nbClock; i++) printInfoClock(tbClock[i]);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printInfoClock
@@ -707,8 +694,6 @@ void ClockGeneratorClass::printInfoClock(Clock &oneClock) {
 
   Serial.print("un: ");
   Serial.println(oneClock.un);
- // Serial.print("size: ");
- // Serial.println(sizeof(oneClock.un));
 
   Serial.print("in: ");
   Serial.println(oneClock.in);
@@ -743,6 +728,7 @@ void ClockGeneratorClass::printInfoClock(Clock &oneClock) {
 
  }
 
+
 //=================================== Functions to store/read from emulated EEPROM ==============================================
 
 // ***********************************************************************************************************
@@ -752,28 +738,16 @@ void ClockGeneratorClass::flashInit() {
   unsigned short readTampon;
 
   EEPROM.get(flashInitAddress,readTampon);
-/*
-  unsigned short status = EEPROM.get(flashInitAddress,readTampon);
-  if (status > 0) {
-    Serial.print("Flash read error on flashInit: ");
-    Serial.println(status, HEX);
-  }
-*/
-  // Debug
-  // Serial.println(readTampon);
 
   if (readTampon !=  flashInitFlag) {
 		saveCalibration();
 		saveSweepSettings();
     saveAllClocksInFlash(0);
     EEPROM.put(flashInitAddress, flashInitFlag);
- /*   if (status > 0) {
-      Serial.print("Flash write error on flashInit: ");
-      Serial.println(status, HEX);
-    }
- */
   }
+
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator saveCalibration
@@ -781,11 +755,13 @@ void ClockGeneratorClass::saveCalibration() {
 	EEPROM.put(flashCalibrationAddress, calibrationPPM);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator readCalibration
 void ClockGeneratorClass::readCalibration() {
 	EEPROM.get(flashCalibrationAddress, calibrationPPM);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator saveSweepSettings
@@ -800,6 +776,7 @@ void ClockGeneratorClass::saveSweepSettings() {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator readSweepSettings
 void ClockGeneratorClass::readSweepSettings() {
@@ -813,6 +790,7 @@ void ClockGeneratorClass::readSweepSettings() {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator savePLLAClocks
 // Saves the PLLAClocks setting for a set of 3 clocks at the given slot
@@ -824,6 +802,7 @@ void ClockGeneratorClass::savePLLAClocks(byte slot) {
 
   EEPROM.put(eepromAddress, (byte)PLLAClks);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator readPLLAClocks
@@ -837,6 +816,7 @@ void ClockGeneratorClass::readPLLAClocks(byte slot) {
   EEPROM.get(eepromAddress, PLLAClks);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator saveAllClocksInFlash
 // Saves all clocks in flash at a slotRange position (starts at 0)
@@ -845,13 +825,8 @@ void ClockGeneratorClass::readPLLAClocks(byte slot) {
   savePLLAClocks(slot);
   for (int i = 0; i < nbClock; i++) saveOneClockInFlash(tbClock[i], slot*nbClock + i);
 
-  // Si5351 parameters are computed depending on the highest clock frequency of all clocks
-  // By configureSi5351()
-  // Hence phaseStep is computed and phase parameters should be exact, given: phase = tbClock[i].ph * phaseStep
-  // If the computation is not repeatable due to the imprecision, the phase might be wrong after saving / loading clock parameters
-  // ... To test
-
  }
+
 
 // ***********************************************************************************************************
 // ClockGenerator saveOneClockInFlash
@@ -865,6 +840,7 @@ void ClockGeneratorClass::saveOneClockInFlash(Clock &oneClock, byte slot) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator readAllClocksFromFlash
 // Loads all clocks from flash at a given slotRange position (starts at 0)
@@ -873,6 +849,7 @@ void ClockGeneratorClass::saveOneClockInFlash(Clock &oneClock, byte slot) {
    readPLLAClocks(slot);
    for (int i = 0; i < nbClock; i++) readOneClockFromFlash(tbClock[i], slot*nbClock + i);
  }
+
 
 // ***********************************************************************************************************
 // ClockGenerator readOneClockFromFlash
@@ -888,20 +865,6 @@ void ClockGeneratorClass::readOneClockFromFlash(Clock &oneClock, byte slot) {
 
 //=================================== Miscellaneous functions ===============================================================
 
-// ***********************************************************************************************************
-// ClockGenerator highestFrequency
-/*
-float ClockGeneratorClass::highestFrequency(float f1, float f2, float f3) {
-  uint64_t highest;
-
-  if (f3> f2) highest = f3;
-  else highest = f2;
-
-  if (f1 > highest) highest = f1;
-
-  return highest;
-}
-*/
 
 // ***********************************************************************************************************
 // ClockGenerator highestFrequencyClock
@@ -916,11 +879,12 @@ byte ClockGeneratorClass::highestFrequencyClock(byte c1, byte c2, byte c3) {
   	if (tbClock[c3].fr > tbClock[c2].fr) {highest = tbClock[c3].fr; highestClockId = c3;}
 	}
 
-  if (tbClock[c1].fr  > highest) {highest = tbClock[c1].fr; highestClockId = c1;}
+  if (tbClock[c1].fr  >= highest) {highest = tbClock[c1].fr; highestClockId = c1;}
 
   return highestClockId;
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator testEncoder
@@ -930,8 +894,6 @@ int ClockGeneratorClass::testEncoder() {
 
   encoder.tick();
   newPos = encoder.getPosition();
-  // DEBUG
-  //Serial.println(newPos);
 
   if (pos != newPos) {
 
@@ -949,6 +911,7 @@ int ClockGeneratorClass::testEncoder() {
 
   return incDec;
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator nextMenuValue
@@ -1001,6 +964,7 @@ void ClockGeneratorClass::nextDisplayValue(int incDec) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator computeSweepState
 swState ClockGeneratorClass::computeSweepState() {
@@ -1015,12 +979,14 @@ swState ClockGeneratorClass::computeSweepState() {
 	else return INACTIVE;
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator timerHandler
 void ClockGeneratorClass::timerHandler() {
 	countSweep++;
 	timeToSweep = true;
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator setTimer
@@ -1031,19 +997,15 @@ void ClockGeneratorClass::setTimer(float period) {
   timer1->attachInterrupt(timerHandler);
   timer1->resume();
 
-/*
-	timer1->setCaptureCompare(TIMER_CH1, 1);  // Interrupt 1 count after each update
-	timer1->attachInterrupt(timerHandler);
-	timer1->refresh();
-  timer1->resume();
-*/
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator stopTimer
 void ClockGeneratorClass::stopTimer() {
 	timer1->pause();
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator startSweep
@@ -1054,7 +1016,6 @@ boolean ClockGeneratorClass::initSweep() {
 	// Sets range and start frequency
   for (int i = 0; i<3 ; i++) {
 		if 	(tbClock[i].as) {
-//			tbClock[i].un = tbClock[i].rs;
 			tbClock[i].fr = tbClock[i].sa;
 			setFrequency(i, tbClock[i].fr);
 			displayClock(i);
@@ -1064,11 +1025,6 @@ boolean ClockGeneratorClass::initSweep() {
 
 	if (!oneActiveSweep) return false;
 
-	//Serial.print("Period sweep: ");
-	//Serial.println(periodSweep);
-	//Serial.print("Count sweep: ");
-	//Serial.println(countSweep);
-
   countSweep = 0;
 	setTimer(periodSweep);
   sweepState = RUNNING;
@@ -1077,11 +1033,11 @@ boolean ClockGeneratorClass::initSweep() {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator sweep
 void ClockGeneratorClass::sweep() {
 	long freqStep;
- // long frequency;
 
   for (int i = 0; i<3 ; i++) {
 	// Each clock that has sweep activated
@@ -1089,11 +1045,11 @@ void ClockGeneratorClass::sweep() {
 			freqStep = (tbClock[i].so - tbClock[i].sa) / nbPeriodSweep;
 			tbClock[i].fr += freqStep;
 			setFrequency(i, tbClock[i].fr);
-//			displayClock(i);
 			displayFrequency(i);
 		} // if
 	}	// for
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator stopSweep
@@ -1104,13 +1060,14 @@ void ClockGeneratorClass::stopSweep() {
 	countSweep = 0;
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator testSweep
 void ClockGeneratorClass::testSweep() {
 
 	if (timeToSweep==true) {
 		if ((countSweep > 1) and (countSweep <= nbPeriodSweep +1)) {
-			//Serial.println(millis());
+			//DEBUG	if (activateUSBSerial) Serial.println(millis());
 			sweep();
 			timeToSweep=false;
 		}
@@ -1120,6 +1077,7 @@ void ClockGeneratorClass::testSweep() {
 	}
 
 }
+
 
 //=================================== Si5351 programming and clock parameters computing =========================================
 
@@ -1152,6 +1110,7 @@ boolean ClockGeneratorClass::computePhaseTied(int clockId) {
   return phaseTied;
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator setPhase
 // Sets the phase property of one clock, and program the Si5351
@@ -1159,16 +1118,15 @@ void ClockGeneratorClass::setPhase(int clockId, byte phaseIndice) {
 
 	if (computePhaseTied(clockId)) {
 
-		if (phaseIndice  > 127) phaseIndice = 127;
-//    if (phaseIndice  < 1) phaseIndice = 1;
-
-		// Limits the phase to 360°
-		if (getPhaseStep(clockId) * (phaseIndice) > 365) {
-	    phaseIndice = (byte)(360/phaseStep);
-	  }
-
 		// If the frequency is under the minimum defined as const, sets phase to 0
 		if (tbClock[clockId].fr < frMinPhase) phaseIndice = 0;
+
+		if (phaseIndice  > 127) phaseIndice = 127;
+
+		// Limits the phase to 360°
+		if (getPhaseStep(clockId) * (phaseIndice) > 361) {
+			phaseIndice += -1;
+	  }
 
 		// Set the phase parameter
     tbClock[clockId].ph = phaseIndice;
@@ -1176,11 +1134,12 @@ void ClockGeneratorClass::setPhase(int clockId, byte phaseIndice) {
     clk = static_cast<si5351_clock>(clockId);
 
     mySi5351.set_phase(clk, tbClock[clockId].ph);
-    mySi5351.pll_reset(SI5351_PLLA);
+    mySi5351.pll_reset(SI5351_PLLA); 							// Needed see Si5351 datasheet
     delay(100);
 
   }
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator getPhase
@@ -1190,6 +1149,7 @@ float ClockGeneratorClass::getPhase(int clockId) {
 	return getPhaseStep(clockId) * tbClock[clockId].ph;
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator setDrive
@@ -1206,6 +1166,7 @@ void ClockGeneratorClass::setDrive(int clockId, byte dr) {
   mySi5351.drive_strength(clk, drive);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator getDrive
 // Gets the drive property of one clock
@@ -1215,17 +1176,11 @@ byte ClockGeneratorClass::getDrive(int clockId) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator changeClockOutputState
 // Activate, de-activate or invert on clock
 void ClockGeneratorClass::changeClockOutputState(int clockId) {
-
-/*
-  Serial.print("ac: ");
-  Serial.println(oneClock.ac);
-  Serial.print("in: ");
-  Serial.println(oneClock.in);
-*/
 
   if ((tbClock[clockId].ac == true) && (tbClock[clockId].in == true)) { // Invert clock
     mySi5351.set_clock_invert(static_cast<si5351_clock>(clockId), 1);
@@ -1238,19 +1193,12 @@ void ClockGeneratorClass::changeClockOutputState(int clockId) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator configureSi5351
 // This will set Si5351 parameters so it can generate the highest frequency chosen with the highest phase resolution possible.
 // And send clock parameters to Si5351
 void ClockGeneratorClass::configureSi5351() {
-
- // Si pas de phase prise en compte on peut fonctionner en mode "integer" et positionner MS0_INT = 1
- // Sinon mode fraction avec MS0_INT = 0
- // A revoir, plus compliqué
-
- // code example with phase shift
- // D'après l'exemple si5351_phase.ino de la librairie etherkit SI5351
- // et https://groups.io/g/QRPLabs/topic/Si5351_issue/4296292?p=,,,20,0,0,0::recentpostdate%2Fsticky,,,20,2,0,4296292
 
   uint64_t frequency ;
   uint64_t computingFrequency;
@@ -1262,6 +1210,7 @@ void ClockGeneratorClass::configureSi5351() {
   byte idCA, idCB;
 	uint64_t pllFr;
   si5351_pll pll;
+
 
   // *********** PLLA ********************************************************
 
@@ -1284,10 +1233,6 @@ void ClockGeneratorClass::configureSi5351() {
   PLLdivider = (SI5351_PLL_VCO_MIN / tbClock[idCA].fr) +1;
 	if (PLLdivider % 2) PLLdivider++; // better to use even divider to set phase to 90° precisely
   mySi5351.plla_freq = PLLdivider * computingFrequency;
-
-	//Serial.print("PLLdivider*freq = ");
-	//printUint64_t(PLLdivider * computingFrequency);
-	//Serial.println(" ");
 
   mySi5351.set_ms_source(static_cast<si5351_clock>(idCA), SI5351_PLLA);
   mySi5351.set_freq(computingFrequency, static_cast<si5351_clock>(idCA)); // computes the pll frequency and sets the frequency
@@ -1313,18 +1258,21 @@ void ClockGeneratorClass::configureSi5351() {
   	mySi5351.set_ms_source(static_cast<si5351_clock>(idCB), SI5351_PLLB);
   	mySi5351.set_freq(tbClock[idCB].fr*SI5351_FREQ_MULT, static_cast<si5351_clock>(idCB)); // computes the pll frequency and sets the frequency
 
-
-
   }
 
-	Serial.print("plla_freq: ");
-	Serial.print(" ");
-	printUint64_t(mySi5351.plla_freq);
-	Serial.println(" ");
-	Serial.print("pllb_freq: ");
-	Serial.print(" ");
-	printUint64_t(mySi5351.pllb_freq);
-	Serial.println(" ");
+	// DEBUG
+
+	if (activateUSBSerial) {
+		Serial.print("plla_freq: ");
+		Serial.print(" ");
+		printUint64_t(mySi5351.plla_freq);
+		Serial.println(" ");
+		Serial.print("pllb_freq: ");
+		Serial.print(" ");
+		printUint64_t(mySi5351.pllb_freq);
+		Serial.println(" ");
+	}
+
 
   // *********** Set each clock frequency, phase, drive and outputState *********
   for (int i = 0; i<3 ; i++) {
@@ -1334,19 +1282,21 @@ void ClockGeneratorClass::configureSi5351() {
   		getPLLSettings(i, pll, pllFr);
   	  mySi5351.set_ms_source(static_cast<si5351_clock>(i), pll); // setFrequency does not set the pll of the clock
   	  mySi5351.set_freq_manual(tbClock[i].fr*SI5351_FREQ_MULT, pllFr, static_cast<si5351_clock>(i));
-			// setFrequency(i, tbClock[i].fr); // i.e. set_freq_manual, since we have set the pll frequency already
+			tbClock[i].fr = mySi5351.clk_freq[i] / SI5351_FREQ_MULT ; // Because might be modified by the library, for example in case of out of bounds.
 		}
 
     // Set phase, drive, output state
     mySi5351.set_phase(static_cast<si5351_clock>(i), tbClock[i].ph);
     mySi5351.drive_strength(static_cast<si5351_clock>(i),tbClock[i].dr);
     changeClockOutputState(tbClock[i].id);
+
   }
 
   mySi5351.pll_reset(SI5351_PLLA);
   mySi5351.pll_reset(SI5351_PLLB);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator setFrequency
@@ -1355,27 +1305,30 @@ void ClockGeneratorClass::setFrequency(int clockId, uint32_t frequency) {
 	uint64_t pllFr;
   si5351_pll pll;
 
-	// DEBUG
-  //Serial.print("setFreq: ");
-  //Serial.println(frequency);
+	/* DEBUG
+	if (activateUSBSerial) {
+  	Serial.print("setFreq: ");
+  	Serial.println(frequency);
+	}
+	*/
 
   tbClock[clockId].fr = frequency;
 
-	// IL Y A UN BUG, PAS MIS A JOUR TOUT LE TEMPS...
-  if (frequency<1000000) {
+  if (frequency < frMinMHz) {
 		tbClock[clockId].un = 0;
 	} else {
 		tbClock[clockId].un = 1;
   }
 
-	uint64_t progFreq = frequency*(SI5351_FREQ_MULT + calibrationPPM/10000) ;
+	uint64_t progFreq = frequency*SI5351_FREQ_MULT;
 
   mySi5351.set_freq(progFreq, static_cast<si5351_clock>(clockId)); // computes the pll frequency if needed and sets the frequency
 
-//  getPLLSettings(clockId, pll, pllFr);
-//  mySi5351.set_freq_manual(tbClock[clockId].fr*SI5351_FREQ_MULT, pllFr, static_cast<si5351_clock>(clockId));
-//  will recompute all so all the clocks are properly set on the same fresh pll_freq
-//  configureSi5351();
+	// DEBUG
+	 if (activateUSBSerial) {
+	Serial.print("progFreq: ");
+	Serial.println(progFreq);
+	}
 
 }
 
@@ -1384,10 +1337,9 @@ void ClockGeneratorClass::setFrequency(int clockId, uint32_t frequency) {
 // ClockGenerator getFrequency
 // Returns the current frequency of the clock
 uint32_t ClockGeneratorClass::getFrequency(int clockId) {
-
 	return tbClock[clockId].fr;
-
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator getPLLSettings
@@ -1418,6 +1370,7 @@ void ClockGeneratorClass::getPLLSettings(int clockId, si5351_pll& pll, uint64_t&
 
 }
 
+
 //=================================== Display functions ========================================================================
 
 // ***********************************************************************************************************
@@ -1428,14 +1381,12 @@ void ClockGeneratorClass::testdrawtext(char *text, uint16_t color) {
   tft.print(text);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator roundFrequency
 // Rounds the frequency on the 6th digit max
 uint64_t ClockGeneratorClass::roundFrequency(uint64_t frequency) {
   int divFactor = 1;
-
-  //Serial.print("frequency to round: ");
-  //Serial.println(frequency);
 
  if (frequency >= 100000000) {
     divFactor = 10;
@@ -1443,6 +1394,7 @@ uint64_t ClockGeneratorClass::roundFrequency(uint64_t frequency) {
 
   return (long)(divFactor * floor(frequency/divFactor));
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator formatFrequency
@@ -1477,8 +1429,9 @@ void ClockGeneratorClass::formatFrequency(uint64_t frequency, int unit, char for
 
   dtostrf(freqDouble, width, precision, formatedFreq );
   // debug
-  //  Serial.println(formatedFreq);
+  // if (activateUSBSerial) Serial.println(formatedFreq);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator elementPosition
@@ -1636,6 +1589,7 @@ void ClockGeneratorClass::elementPosition(runMode element, byte &line, byte &col
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator displayElement
 // displays an element depending on its type defined as a runMode enum value
@@ -1656,6 +1610,7 @@ byte ClockGeneratorClass::displayElement(runMode elementType, char elementText[]
 
 	return yPos;
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator displayCursor
@@ -1679,6 +1634,7 @@ void ClockGeneratorClass::displayCursor(runMode elementType, boolean disp) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator displayCursor
 // When defined by the runMode context
@@ -1693,25 +1649,20 @@ void ClockGeneratorClass::displayCursor(boolean disp) {
 // ClockGenerator flashTrice
 void ClockGeneratorClass::flashTrice(byte line) {
 
-//  displayCursor(line,false);
   displayCursor(false);
   delay(100);
-//  displayCursor(line,true);
   displayCursor(true);
   delay(100);
-//  displayCursor(line,false);
   displayCursor(false);
   delay(100);
-//  displayCursor(line,true);
   displayCursor(true);
   delay(100);
-//  displayCursor(line,false);
   displayCursor(false);
   delay(100);
-//  displayCursor(line,true);
   displayCursor(true);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator displayIcon
@@ -1730,6 +1681,7 @@ void ClockGeneratorClass::displayIcon(byte line, boolean active, boolean inv) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator flashCursor
 void ClockGeneratorClass::flashCursor() {
@@ -1742,6 +1694,7 @@ void ClockGeneratorClass::flashCursor() {
   }
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator displayClock
@@ -1811,6 +1764,7 @@ void ClockGeneratorClass::displayClock(int clockId) {
   displayIcon(clockId*2+1,tbClock[clockId].ac,tbClock[clockId].in) ;
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator displayFrequency
 // Displays only the frequency of a clock, used when sweeping
@@ -1845,6 +1799,7 @@ void ClockGeneratorClass::displayFrequency(int clockId) {
   testdrawtext(line1, color);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printSweep
 void ClockGeneratorClass::printSweep() {
@@ -1864,6 +1819,7 @@ void ClockGeneratorClass::printSweep() {
   tft.setCursor(14,122);
   testdrawtext("SWEEP", ST7735_BLACK);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator displayAllClocks
@@ -1885,6 +1841,7 @@ void ClockGeneratorClass::displayAllClocks() {
 	displayCursor(true);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printRange
 void ClockGeneratorClass::printRange(Clock &oneClock) {
@@ -1892,6 +1849,7 @@ void ClockGeneratorClass::printRange(Clock &oneClock) {
   if (oneClock.un == 0) testdrawtext("Range: KHz", ST7735_WHITE);
   else if (oneClock.un == 1) testdrawtext("Range: MHz", ST7735_WHITE);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printStep
@@ -1913,6 +1871,7 @@ void ClockGeneratorClass::printStep (Clock &oneClock) {
   testdrawtext(line, ST7735_WHITE);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printFreq
 void ClockGeneratorClass::ClockGeneratorClass::printFreq (Clock &oneClock) {
@@ -1929,6 +1888,7 @@ void ClockGeneratorClass::ClockGeneratorClass::printFreq (Clock &oneClock) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator driveDisplayValue
 byte ClockGeneratorClass::driveDisplayValue(si5351_drive drive) {
@@ -1940,6 +1900,7 @@ byte ClockGeneratorClass::driveDisplayValue(si5351_drive drive) {
 		case SI5351_DRIVE_8MA: return 8;
   }
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printDrive
@@ -1961,14 +1922,13 @@ void ClockGeneratorClass::printDrive (Clock &oneClock) {
   testdrawtext(line, ST7735_WHITE);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printPhase
 void ClockGeneratorClass::printPhase(Clock &oneClock) {
   char line[15];
   float phaseFloat;
   char phase[6];
-
-// A revoir .ps incohérent avec phaseTied etc
 
   if (!computePhaseTied(selectedClock)) {
     sprintf(line, "P: IND");
@@ -1987,6 +1947,7 @@ void ClockGeneratorClass::printPhase(Clock &oneClock) {
   testdrawtext(line, ST7735_WHITE);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator edit1Clock
@@ -2037,6 +1998,7 @@ void ClockGeneratorClass::edit1Clock(Clock &oneClock, boolean refresh) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printPhaseOptions
 void ClockGeneratorClass::printPhaseOptions(boolean refresh) {
@@ -2056,6 +2018,7 @@ void ClockGeneratorClass::printPhaseOptions(boolean refresh) {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printCal
 void ClockGeneratorClass::ClockGeneratorClass::printCal(boolean refresh) {
@@ -2065,7 +2028,7 @@ void ClockGeneratorClass::ClockGeneratorClass::printCal(boolean refresh) {
   if (refresh == true) tft.fillRect(40, 3*(lineHeight + interLine)+4, 88, lineHeight + interLine,  ST7735_BLACK);
 
   dtostrf(calibrationPPM, 3, 2, cal );
-  sprintf(line, "Cal: %-3s ppm", cal);
+  sprintf(line, "Cal: %-3s p.", cal);
 
   tft.setCursor(10, 4*(lineHeight + interLine));
   testdrawtext(line, ST7735_WHITE);
@@ -2102,6 +2065,7 @@ void ClockGeneratorClass::displayOptions() {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator displayStore
 void ClockGeneratorClass::displayStore() {
@@ -2125,6 +2089,7 @@ void ClockGeneratorClass::displayStore() {
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printNbPeriodSweep
 void ClockGeneratorClass::printNbPeriodSweep(boolean refresh) {
@@ -2134,14 +2099,13 @@ void ClockGeneratorClass::printNbPeriodSweep(boolean refresh) {
   if (refresh == true) tft.fillRect(60, 1*(lineHeight + interLine)+4, 68, lineHeight + interLine,  ST7735_BLACK);
 
   dtostrf(nbPeriodSweep, 5, 0, nb);
-//  sprintf(line, "Steps: %-5s ", nb);
-
   sprintf(line, "Steps: %-5u ", nbPeriodSweep);
 
   tft.setCursor(10, 2*(lineHeight + interLine));
   testdrawtext(line, ST7735_WHITE);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printPeriodSweep
@@ -2159,18 +2123,20 @@ void ClockGeneratorClass::printPeriodSweep(boolean refresh) {
   testdrawtext(line, ST7735_WHITE);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printInfoSweepCx
 void ClockGeneratorClass::ClockGeneratorClass::printInfoSweepCx (int clockId) {
   char line[15];
   char frChar[10];
 
-  formatFrequency(tbClock[clockId].sa, tbClock[clockId].rs, frChar);
+//  formatFrequency(tbClock[clockId].sa, tbClock[clockId].rs, frChar);
 
 	if (!tbClock[clockId].as) sprintf(line, "C%i: inactive", clockId+1);
   else {
-	  if (tbClock[clockId].rs == 0) sprintf(line, "C%i: %-6s K", clockId+1, frChar);
-	  if (tbClock[clockId].rs == 1) sprintf(line, "C%i: %-6s M", clockId+1, frChar);
+		sprintf(line, "C%i: active", clockId+1);
+//	  if (tbClock[clockId].rs == 0) sprintf(line, "C%i: %-5s K", clockId+1, frChar);
+//	  if (tbClock[clockId].rs == 1) sprintf(line, "C%i: %-5s M", clockId+1, frChar);
 	}
 
   byte baseline =  (4 + clockId) * (lineHeight + interLine);
@@ -2181,6 +2147,7 @@ void ClockGeneratorClass::ClockGeneratorClass::printInfoSweepCx (int clockId) {
   testdrawtext(">", ST7735_WHITE);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator displaySweep
@@ -2199,26 +2166,10 @@ void ClockGeneratorClass::displaySweep() {
   printInfoSweepCx(0);
   printInfoSweepCx(1);
   printInfoSweepCx(2);
-
-/*
-  tft.setCursor(10, 4*(lineHeight + interLine));
-
-  testdrawtext("C1: 1.000 M", ST7735_WHITE);
-  tft.setCursor(115, 4*(lineHeight + interLine));
-  testdrawtext(">", ST7735_WHITE);
-  tft.setCursor(10, 5*(lineHeight + interLine));
-  testdrawtext("C2: 999.0 K", ST7735_WHITE);
-  tft.setCursor(115, 5*(lineHeight + interLine));
-  testdrawtext(">", ST7735_WHITE);
-  tft.setCursor(10, 6*(lineHeight + interLine));
-  testdrawtext("C3: inactive", ST7735_WHITE);
-  tft.setCursor(115, 6*(lineHeight + interLine));
-  testdrawtext(">", ST7735_WHITE);
-*/
-
 	printExit();
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printSweepActivate
@@ -2232,6 +2183,7 @@ void ClockGeneratorClass::printSweepActivate(Clock &oneClock, boolean refresh) {
 
  }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printSweepRange
 void ClockGeneratorClass::printSweepRange(Clock &oneClock, boolean refresh) {
@@ -2242,6 +2194,7 @@ void ClockGeneratorClass::printSweepRange(Clock &oneClock, boolean refresh) {
   if (oneClock.rs == 0) testdrawtext("Range: KHz", ST7735_WHITE);
   else if (oneClock.rs == 1) testdrawtext("Range: MHz", ST7735_WHITE);
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator printSweepStep
@@ -2265,6 +2218,7 @@ void ClockGeneratorClass::printSweepStep (Clock &oneClock, boolean refresh) {
   testdrawtext(line, ST7735_WHITE);
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printSweepStartFrequency
 void ClockGeneratorClass::ClockGeneratorClass::printSweepStartFrequency (Clock &oneClock, boolean refresh) {
@@ -2283,6 +2237,7 @@ void ClockGeneratorClass::ClockGeneratorClass::printSweepStartFrequency (Clock &
 
 }
 
+
 // ***********************************************************************************************************
 // ClockGenerator printSweepStopFrequency
 void ClockGeneratorClass::ClockGeneratorClass::printSweepStopFrequency (Clock &oneClock, boolean refresh) {
@@ -2300,6 +2255,7 @@ void ClockGeneratorClass::ClockGeneratorClass::printSweepStopFrequency (Clock &o
   testdrawtext(line, ST7735_WHITE);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator editSweepSettings
@@ -2329,82 +2285,6 @@ void ClockGeneratorClass::editSweepSettings(Clock &oneClock, boolean refresh) {
 
 
 // ***********************************************************************************************************
-// ClockGenerator displaySweepSettings
-// Displays a clock sweep settings
-/*
-
-void ClockGeneratorClass::editSweepSettings(int clockId) {
-
-	char cstr[1];
-	itoa(clockId, cstr, 10);
-
-  tft.fillScreen(ST7735_BLACK);
-  tft.setFont(&FreeSans9pt7b);
-
-  tft.fillRoundRect(8, 0, 120, lineHeight + interLine, 0, ST7735_YELLOW);
-  tft.setCursor(10,lineHeight);
-  testdrawtext("SWEEP C", ST7735_BLACK);
-  testdrawtext(cstr, ST7735_BLACK);
-  tft.setCursor(10, 2*(lineHeight + interLine));
-  testdrawtext("Active: yes", ST7735_WHITE);
-  tft.setCursor(10, 3*(lineHeight + interLine));
-  testdrawtext("Range: MHz", ST7735_WHITE);
-  tft.setCursor(10, 4*(lineHeight + interLine));
-  testdrawtext("S: 0.1/1 MHz", ST7735_WHITE);
-  tft.setCursor(10, 5*(lineHeight + interLine));
-  testdrawtext("From: 180.999", ST7735_WHITE);
-  tft.setCursor(10, 6*(lineHeight + interLine));
-  testdrawtext("To: 199.999", ST7735_WHITE);
-
-	printExit();
-
-  char frChar[10];
-  float phaseFloat;
-  char phase[5];
-  char line1[15];
-  char line2[15];
-  uint16_t color;
-
-  byte baseline = lineHeight + 2 * clockId * (lineHeight + interLine);
-
-  formatFrequency(tbClock[clockId], frChar);
-
-  sprintf(line1, "%-8s", frChar);
-
-  phaseFloat = tbClock[clockId].ph * phaseStep;
-  dtostrf(phaseFloat, 3, 1, phase );
-  sprintf(line2, "%-i mA %-3s d", outputDrive[tbClock[clockId].dr], phase);
-
-  tft.setFont(&FreeSans9pt7b);
-  tft.fillRect(0, baseline-lineHeight+interLine, 128, 2*lineHeight + interLine , 0);
-
-  // Displays formated lines
-  tft.setCursor(20,baseline);
-  color = colorInactive;
-
-  if ((tbClock[clockId].ac == true) && (tbClock[clockId].in == true)) {
-      color = colorInverted;
-
-  } else if (tbClock[clockId].ac == true) {
-    color = colorActive;
-  }
-
-  tft.setCursor(20,baseline);
-  testdrawtext(line1, color);
-
-  tft.setCursor(110,baseline);
-  if (tbClock[clockId].un == 0) testdrawtext("K", color);
-  if (tbClock[clockId].un == 1) testdrawtext("M", color);
-
-  tft.setCursor(20,baseline + lineHeight + interLine);
-  testdrawtext(line2, color);
-  tft.drawFastHLine(12,baseline + lineHeight + 2* interLine, 116, color ),
-  displayIcon(clockId*2+1,tbClock[clockId].ac,tbClock[clockId].in) ;
-
-}
-*/
-
-// ***********************************************************************************************************
 // ClockGenerator printExit
 void ClockGeneratorClass::printExit() {
 
@@ -2415,6 +2295,7 @@ void ClockGeneratorClass::printExit() {
 	tft.setFont(&FreeSans9pt7b);
 
 }
+
 
 //========================================== BUTTON EVENT HANDLERS =============================================================
 
@@ -2443,6 +2324,7 @@ void ClockGeneratorClass::buttonPress() {
   edit1Clock(tbClock[selectedClock], false);
 
 }
+
 
 // ***********************************************************************************************************
 // ClockGenerator buttonClick
@@ -2515,6 +2397,7 @@ void ClockGeneratorClass::buttonClick() {
     	break;
 
 			case display_calibration:
+			setCalibration(calibrationPPM);
 			saveCalibration();
 			editing = false;
 			break;
@@ -2596,7 +2479,6 @@ void ClockGeneratorClass::buttonClick() {
 			break;
 
 			case display_clock_exit:
-			// save the clock parameters
 	    saveOneClockInFlash(tbClock[selectedClock], 0);
 	    if  (selectedClock == 0) editMode = display_clocks_c0;
     	else if (selectedClock == 1) editMode = display_clocks_c1;
@@ -2626,9 +2508,6 @@ void ClockGeneratorClass::buttonClick() {
 			break;
 
 			case display_factory_reset:
-
-			//flashInit(true);
-			//begin();
 			EEPROM.put(flashInitAddress, flashInitFlag+1);
 			NVIC_SystemReset();
 			break;

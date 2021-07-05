@@ -1,18 +1,10 @@
-/* This version works with the board "Pandauino.com Clock Generator v1.0"
- * MCU = STM32F103CBT9 
+/* This version works with the Pandauino.com board "Clock Generator v1.1"
+ * MCU = STM32F103CBT6 
  * Programmed using STM32CubePorgrammer (SWD)
- * Or Maple DFU Bootloader v 2.0  (generic_boot20_pb0.bin)
+ * Or USB / Maple DFU Bootloader v 2.0  (generic_boot20_pb0.bin)
  * 
- * DEPENDENCIES:
- *
- * 1) "Arduino Core STM32" https://github.com/stm32duino/Arduino_Core_STM32
- *  // !!!!!!!!!!!!!!!! REVOIR LIEN / LIBRAIRIE Pandauino_Si5351A
- * 2) The library Si5351 by Etherkit https://github.com/etherkit/Si5351Arduino 
- * 3) Rotary encoder library http://www.mathertel.de/Arduino/RotaryEncoderLibrary.aspx  
- * 4) One Button library http://www.mathertel.de/Arduino/OneButtonLibrary.aspx
- * 5-6) Adafruit GFX and ST7735 libraries 
- *  https://github.com/adafruit/Adafruit-GFX-Library 
- *  https://github.com/adafruit/Adafruit-ST7735-Library
+ * See Pandauino_Clock_Generator.h for more details (on dependencies etc)
+ * And the user's manual in https://github.com/mrguen/ClockGen/blob/main/doc
  * 
  * CONFIGURATION:
  * 
@@ -46,10 +38,8 @@
 // SETUP
 void setup()
 {
-  Serial.begin(115200);
-  while (!Serial) {}
+  ClockGenerator.begin(false,115200);
   
-  ClockGenerator.begin();
 } // setup()
 
 
@@ -58,4 +48,5 @@ void setup()
 void loop()
 {
   ClockGenerator.run();
+  
 } // loop ()
